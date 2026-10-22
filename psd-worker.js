@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.4.3';
-const RENDER_ENGINE_REVISION='masked-pass-through-backdrop-1';
+const WORKER_VERSION='v0.4.4';
+const RENDER_ENGINE_REVISION='masked-pass-through-opacity-diagnostics-2';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
@@ -17,7 +17,7 @@ function render(options={}){
  const counts={total:0,groups:0,hidden:0,hiddenDescendants:0,emptyImage:0,drawn:0,clipping:0,mask:0,effects:0,unsupportedBlend:0,maskApplied:0,clipApplied:0,clipOrphan:0,maskUnavailable:0,visibleMaskCandidates:0,visibleClipCandidates:0,passThroughDirect:0,passThroughFallback:0};
  let layerOrdinal=0;
  const alpha=(v)=>Math.min(1,Math.max(0,(v??1)>1?v/255:v));
- function put(target,src,x,y,l,mode){target.save();target.globalAlpha=alpha(l.opacity);const key=blendMap[String(mode).trim()]||blendMap[String(mode).replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase()];if(!key){warnings.add('未対応合成モード '+mode+' : '+(l.name||'(無名)'));target.globalCompositeOperation='source-over'}else target.globalCompositeOperation=key;target.drawImage(src,x,y);target.restore()}
+ function put(target,src,x,y,l,mode,nodeId){target.save();target.globalAlpha=(nodeId===options.debugOpacityOverrideId&&Number.isFinite(options.debugOpacityOverride))?Math.max(0,Math.min(1,options.debugOpacityOverride)):alpha(l.opacity);const key=blendMap[String(mode).trim()]||blendMap[String(mode).replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase()];if(!key){warnings.add('未対応合成モード '+mode+' : '+(l.name||'(無名)'));target.globalCompositeOperation='source-over'}else target.globalCompositeOperation=key;target.drawImage(src,x,y);target.restore()}
  function extractMask(mask,layer){
    if(!mask||mask.disabled)return null;
    if(!mask.canvas){counts.maskUnavailable++;return null}
@@ -94,7 +94,7 @@ function render(options={}){
        // render children against that backdrop and mix back with the original
        // using mask coverage. Isolating the group would erase multiply semantics.
        const groupOpacity=alpha(l.opacity);
-       const hasGroupMask=enableMasks&&!!l.mask&&!l.mask.disabled;
+       const hasGroupMask=enableMasks&&!!l.mask&&!l.mask.disabled&&options.debugNoGroupMaskId!==nodeId;
        let groupMask=null;
        if(hasGroupMask){
          groupMask=extractMask(l.mask,l);
@@ -136,7 +136,7 @@ function render(options={}){
      }else if(l.clipping){warnings.add('クリッピング無効（比較用）: '+path)}
      if(!l.clipping)baseAlpha=alphaFromCanvas(standalone);
      // Do not double-apply the opacity of groups inside layer buffers.
-     put(target,standalone,0,0,l,options.debugNormalBlendId===nodeId?'normal':((mode==='passThrough'||mode==='pass through')?'normal':mode));
+     put(target,standalone,0,0,l,options.debugNormalBlendId===nodeId?'normal':((mode==='passThrough'||mode==='pass through')?'normal':mode),nodeId);
      if(!g){entry.drawOrder=++layerOrdinal;entry.rendered=true;entry.reason='drawn';counts.drawn++}
    }
  }
@@ -164,7 +164,7 @@ if(ref[i+3]>0||output.data[i+3]>0){visibleMismatch++;for(let j=0;j<3;j++)composi
  const spatial={tileSize,thresholds,largestError,topTiles:sortedTiles.slice(0,20).map(t=>({...t,meanMaxChannelError:t.absoluteError/(t.width*t.height)})),top10ErrorShare:weightedErrorTotal?sortedTiles.slice(0,10).reduce((acc,t)=>acc+t.absoluteError,0)/weightedErrorTotal:0};
  comparison={differencePixels:errorPixels,totalPixels:w*h,meanAbsError:totalAbs/(w*h*4),meanPremultipliedRgbError:compositedRGBAbs/(w*h*3),meanAlphaError:alphaAbs/(w*h),maxError,nontransparentPixels:visibleMismatch,spatial,diffBitmap:diff.transferToImageBitmap(),heatmapBitmap:hot.transferToImageBitmap()};}
  const pixels=output.data;let checksum=2166136261;for(let i=0;i<pixels.length;i++){checksum^=pixels[i];checksum=Math.imul(checksum,16777619)}
- return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.debugMode?'diagnostic-preview':(options.visibilityMap?'classification-preview':(options.forceVisible?'force-visible':'original')),order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough},debug:{mode:options.debugMode||null,skipLayerId:options.debugSkipLayerId||null,onlyLayerId:options.debugOnlyLayerId||null,normalBlendId:options.debugNormalBlendId||null}};
+ return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.debugMode?'diagnostic-preview':(options.visibilityMap?'classification-preview':(options.forceVisible?'force-visible':'original')),order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough},debug:{mode:options.debugMode||null,skipLayerId:options.debugSkipLayerId||null,onlyLayerId:options.debugOnlyLayerId||null,normalBlendId:options.debugNormalBlendId||null,opacityOverrideId:options.debugOpacityOverrideId||null,opacityOverride:options.debugOpacityOverride??null,noGroupMaskId:options.debugNoGroupMaskId||null}};
 }
 function findNode(nodes,id,prefix='r'){for(let i=0;i<(nodes||[]).length;i++){const l=nodes[i],key=prefix+'/'+i;if(key===id)return l;if(l.children){const result=findNode(l.children,id,key);if(result)return result}}return null}
 self.postMessage({type:'ready',workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION});
