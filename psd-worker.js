@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.3.3';
-const RENDER_ENGINE_REVISION='classification-visibility-audit-3';
+const WORKER_VERSION='v0.3.4';
+const RENDER_ENGINE_REVISION='classification-nested-id-fix-4';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
@@ -77,7 +77,7 @@ function render(options={}){
      }
      if(g){entry.reason='group';
        const groupBuffer=makeCanvas(w,h),groupCtx=groupBuffer.getContext('2d',{willReadFrequently:true});
-       nodesDraw(l.children,groupCtx,path,false);
+       nodesDraw(l.children,groupCtx,path,false,nodeId);
        if(mode==='passThrough'||mode==='pass through'){
          if(enablePassThrough){counts.passThroughFallback++;warnings.add('通過グループに不透明度・マスク・クリッピング等があるため隔離合成で代用: '+path)}
          else warnings.add('通過グループを隔離合成（比較用）: '+path);
