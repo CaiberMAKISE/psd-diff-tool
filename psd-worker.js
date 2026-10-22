@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.2.7';
-const RENDER_ENGINE_REVISION='spatial-diff-analysis-1';
+const WORKER_VERSION='v0.3.1';
+const RENDER_ENGINE_REVISION='classification-preview-1';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
@@ -48,17 +48,19 @@ function render(options={}){
  }
  function alphaFromCanvas(canvas){const data=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data;const a=new Uint8Array(w*h);for(let j=0,i=3;j<a.length;j++,i+=4)a[j]=data[i];return a}
  function constrainAlpha(canvas,mask){const t=canvas.getContext('2d',{willReadFrequently:true}),id=t.getImageData(0,0,w,h);for(let i=3,j=0;i<id.data.length;i+=4,j++)id.data[i]=Math.round(id.data[i]*mask[j]/255);t.putImageData(id,0,0)}
- function nodesDraw(nodes,target,parentPath='',ancestorHidden=false){
+ function nodesDraw(nodes,target,parentPath='',ancestorHidden=false,prefix='r'){
    // Verified against ember_ic and wisleah_ic: draw children in array order.
    // Never reverse here unless explicitly requested for diagnostics.
    const ordered=options.reverseOrder?[...(nodes||[])].reverse():[...(nodes||[])];
    let baseAlpha=null;
    for(const l of ordered){
+     const nodeIndex=(nodes||[]).indexOf(l),nodeId=prefix+'/'+nodeIndex;
      const path=parentPath+'/'+(l.name||'(無名)'),g=isGroup(l),isHidden=l.hidden===true,mode=l.blendMode||'normal';
      const entry={path,name:l.name||'',type:g?'group':'layer',originalHidden:isHidden,ancestorHidden,hasCanvas:!!l.canvas,hasImageData:!!l.imageData,blendMode:mode,opacity:l.opacity??null,clipping:!!l.clipping,mask:!!(l.mask||l.realMask),effects:!!l.effects,bounds:{left:l.left??null,top:l.top??null,right:l.right??null,bottom:l.bottom??null},canvasSize:l.canvas?{width:l.canvas.width,height:l.canvas.height}:null,reason:'',rendered:false,drawOrder:null,maskApplied:false,clipApplied:false};
      trace.push(entry);counts.total++;if(g)counts.groups++;if(l.clipping)counts.clipping++;if(l.mask||l.realMask)counts.mask++;if(l.effects)counts.effects++;if(!blendMap[mode])counts.unsupportedBlend++;if(isHidden)counts.hidden++;if(ancestorHidden)counts.hiddenDescendants++;
-     const blocked=(ancestorHidden||isHidden)&&!options.forceVisible;
-     if(blocked){entry.reason=ancestorHidden?'ancestor-hidden':'self-hidden';if(g)nodesDraw(l.children,target,path,true);if(!l.clipping)baseAlpha=null;continue}
+     const hasVisibilityMap=!!options.visibilityMap;
+     const blocked=hasVisibilityMap?!options.visibilityMap[nodeId]:((ancestorHidden||isHidden)&&!options.forceVisible);
+     if(blocked){entry.reason=ancestorHidden?'ancestor-hidden':'self-hidden';if(g)nodesDraw(l.children,target,path,hasVisibilityMap?false:true,nodeId);if(!l.clipping)baseAlpha=null;continue}
      if(l.mask && !l.mask.disabled)counts.visibleMaskCandidates++;
      if(l.clipping)counts.visibleClipCandidates++;
      let src=null;
@@ -66,7 +68,7 @@ function render(options={}){
        // A pass-through group with no group-local restrictions acts as a transparent
        // structural container. Draw children into the actual backdrop, so multiply,
        // color-dodge, etc. see pixels underneath the group.
-       nodesDraw(l.children,target,path,false);
+       nodesDraw(l.children,target,path,false,nodeId);
        counts.passThroughDirect++;
        entry.reason='pass-through-direct';
        // Clipping across group boundaries is not modeled yet.
@@ -125,7 +127,7 @@ if(ref[i+3]>0||output.data[i+3]>0){visibleMismatch++;for(let j=0;j<3;j++)composi
  const spatial={tileSize,thresholds,largestError,topTiles:sortedTiles.slice(0,20).map(t=>({...t,meanMaxChannelError:t.absoluteError/(t.width*t.height)})),top10ErrorShare:weightedErrorTotal?sortedTiles.slice(0,10).reduce((acc,t)=>acc+t.absoluteError,0)/weightedErrorTotal:0};
  comparison={differencePixels:errorPixels,totalPixels:w*h,meanAbsError:totalAbs/(w*h*4),meanPremultipliedRgbError:compositedRGBAbs/(w*h*3),meanAlphaError:alphaAbs/(w*h),maxError,nontransparentPixels:visibleMismatch,spatial,diffBitmap:diff.transferToImageBitmap(),heatmapBitmap:hot.transferToImageBitmap()};}
  const pixels=output.data;let checksum=2166136261;for(let i=0;i<pixels.length;i++){checksum^=pixels[i];checksum=Math.imul(checksum,16777619)}
- return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.forceVisible?'force-visible':'original',order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough}};
+ return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.visibilityMap?'classification-preview':(options.forceVisible?'force-visible':'original'),order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough}};
 }
 function findNode(nodes,id,prefix='r'){for(let i=0;i<(nodes||[]).length;i++){const l=nodes[i],key=prefix+'/'+i;if(key===id)return l;if(l.children){const result=findNode(l.children,id,key);if(result)return result}}return null}
 self.postMessage({type:'ready',workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION});
