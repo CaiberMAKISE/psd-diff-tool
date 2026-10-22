@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.4.2';
-const RENDER_ENGINE_REVISION='target-layer-composite-diagnostic-1';
+const WORKER_VERSION='v0.4.3';
+const RENDER_ENGINE_REVISION='masked-pass-through-backdrop-1';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
@@ -48,6 +48,28 @@ function render(options={}){
  }
  function alphaFromCanvas(canvas){const data=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data;const a=new Uint8Array(w*h);for(let j=0,i=3;j<a.length;j++,i+=4)a[j]=data[i];return a}
  function constrainAlpha(canvas,mask){const t=canvas.getContext('2d',{willReadFrequently:true}),id=t.getImageData(0,0,w,h);for(let i=3,j=0;i<id.data.length;i+=4,j++)id.data[i]=Math.round(id.data[i]*mask[j]/255);t.putImageData(id,0,0)}
+ // Composite pass-through children against the real backdrop, then attenuate
+ // the difference between the before and after images by the group mask.
+ // All calculations are performed in premultiplied alpha to preserve transparency.
+ function compositeMaskedPassThrough(target,before,mask,opacity){
+   const beforeData=before.data;
+   const current=target.getImageData(0,0,w,h);
+   const after=current.data;
+   for(let p=0,i=0;p<w*h;p++,i+=4){
+     const t=Math.max(0,Math.min(1,(mask?mask[p]/255:1)*opacity));
+     if(t===1)continue;
+     if(t===0){after[i]=beforeData[i];after[i+1]=beforeData[i+1];after[i+2]=beforeData[i+2];after[i+3]=beforeData[i+3];continue}
+     const aa=beforeData[i+3]/255,ab=after[i+3]/255;
+     const ao=aa*(1-t)+ab*t;
+     if(ao<=0){after[i]=0;after[i+1]=0;after[i+2]=0;after[i+3]=0;continue}
+     for(let c=0;c<3;c++){
+       const premultiplied=beforeData[i+c]*aa*(1-t)+after[i+c]*ab*t;
+       after[i+c]=Math.round(premultiplied/ao);
+     }
+     after[i+3]=Math.round(ao*255);
+   }
+   target.putImageData(current,0,0);
+ }
  function nodesDraw(nodes,target,parentPath='',ancestorHidden=false,prefix='r'){
    // Verified against ember_ic and wisleah_ic: draw children in array order.
    // Never reverse here unless explicitly requested for diagnostics.
@@ -67,14 +89,26 @@ function render(options={}){
      if(l.mask && !l.mask.disabled)counts.visibleMaskCandidates++;
      if(l.clipping)counts.visibleClipCandidates++;
      let src=null;
-     if(g && (mode==='pass through'||mode==='passThrough') && enablePassThrough && alpha(l.opacity)===1 && !l.mask && !l.realMask && !l.vectorMask && !l.clipping){
-       // A pass-through group with no group-local restrictions acts as a transparent
-       // structural container. Draw children into the actual backdrop, so multiply,
-       // color-dodge, etc. see pixels underneath the group.
+     if(g && (mode==='pass through'||mode==='passThrough') && enablePassThrough && !l.clipping && !l.realMask && !l.vectorMask){
+       // Pass-through groups must see the parent's backdrop. For masked groups,
+       // render children against that backdrop and mix back with the original
+       // using mask coverage. Isolating the group would erase multiply semantics.
+       const groupOpacity=alpha(l.opacity);
+       const hasGroupMask=enableMasks&&!!l.mask&&!l.mask.disabled;
+       let groupMask=null;
+       if(hasGroupMask){
+         groupMask=extractMask(l.mask,l);
+         if(!groupMask)warnings.add('グループマスク未取得: '+path);
+       }
+       const needsMix=groupOpacity<1||!!groupMask;
+       const before=needsMix?target.getImageData(0,0,w,h):null;
        nodesDraw(l.children,target,path,false,nodeId);
+       if(needsMix){
+         compositeMaskedPassThrough(target,before,groupMask,groupOpacity);
+         if(groupMask){counts.maskApplied++;entry.maskApplied=true}
+       }
        counts.passThroughDirect++;
-       entry.reason='pass-through-direct';
-       // Clipping across group boundaries is not modeled yet.
+       entry.reason=needsMix?'pass-through-backdrop-mask':'pass-through-direct';
        baseAlpha=null;
        continue;
      }
