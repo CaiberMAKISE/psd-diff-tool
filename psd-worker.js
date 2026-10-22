@@ -1,5 +1,5 @@
  'use strict';
-const WORKER_VERSION='v0.3.4';
+const WORKER_VERSION='v0.3.5';
 const RENDER_ENGINE_REVISION='classification-nested-id-fix-4';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
