@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.4.1';
-const RENDER_ENGINE_REVISION='classification-nested-id-fix-4';
+const WORKER_VERSION='v0.4.2';
+const RENDER_ENGINE_REVISION='target-layer-composite-diagnostic-1';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
@@ -59,7 +59,10 @@ function render(options={}){
      const entry={path,name:l.name||'',type:g?'group':'layer',originalHidden:isHidden,ancestorHidden,hasCanvas:!!l.canvas,hasImageData:!!l.imageData,blendMode:mode,opacity:l.opacity??null,clipping:!!l.clipping,mask:!!(l.mask||l.realMask),effects:!!l.effects,bounds:{left:l.left??null,top:l.top??null,right:l.right??null,bottom:l.bottom??null},canvasSize:l.canvas?{width:l.canvas.width,height:l.canvas.height}:null,reason:'',rendered:false,drawOrder:null,maskApplied:false,clipApplied:false};
      trace.push(entry);counts.total++;if(g)counts.groups++;if(l.clipping)counts.clipping++;if(l.mask||l.realMask)counts.mask++;if(l.effects)counts.effects++;if(!blendMap[mode])counts.unsupportedBlend++;if(isHidden)counts.hidden++;if(ancestorHidden)counts.hiddenDescendants++;
      const hasVisibilityMap=!!options.visibilityMap;
-     const blocked=hasVisibilityMap?!options.visibilityMap[nodeId]:((ancestorHidden||isHidden)&&!options.forceVisible);
+     const onlyId=options.debugOnlyLayerId;
+     const relevant=!onlyId||nodeId===onlyId||(g&&onlyId.startsWith(nodeId+'/'));
+     if(!relevant||options.debugSkipLayerId===nodeId){entry.reason=!relevant?'diagnostic-other-layer':'diagnostic-skipped';if(!l.clipping)baseAlpha=null;continue}
+     const blocked=onlyId?false:(hasVisibilityMap?!options.visibilityMap[nodeId]:((ancestorHidden||isHidden)&&!options.forceVisible));
      if(blocked){entry.reason=ancestorHidden?'ancestor-hidden':'self-hidden';if(g)nodesDraw(l.children,target,path,hasVisibilityMap?false:true,nodeId);if(!l.clipping)baseAlpha=null;continue}
      if(l.mask && !l.mask.disabled)counts.visibleMaskCandidates++;
      if(l.clipping)counts.visibleClipCandidates++;
@@ -99,7 +102,7 @@ function render(options={}){
      }else if(l.clipping){warnings.add('クリッピング無効（比較用）: '+path)}
      if(!l.clipping)baseAlpha=alphaFromCanvas(standalone);
      // Do not double-apply the opacity of groups inside layer buffers.
-     put(target,standalone,0,0,l,(mode==='passThrough'||mode==='pass through')?'normal':mode);
+     put(target,standalone,0,0,l,options.debugNormalBlendId===nodeId?'normal':((mode==='passThrough'||mode==='pass through')?'normal':mode));
      if(!g){entry.drawOrder=++layerOrdinal;entry.rendered=true;entry.reason='drawn';counts.drawn++}
    }
  }
@@ -127,7 +130,7 @@ if(ref[i+3]>0||output.data[i+3]>0){visibleMismatch++;for(let j=0;j<3;j++)composi
  const spatial={tileSize,thresholds,largestError,topTiles:sortedTiles.slice(0,20).map(t=>({...t,meanMaxChannelError:t.absoluteError/(t.width*t.height)})),top10ErrorShare:weightedErrorTotal?sortedTiles.slice(0,10).reduce((acc,t)=>acc+t.absoluteError,0)/weightedErrorTotal:0};
  comparison={differencePixels:errorPixels,totalPixels:w*h,meanAbsError:totalAbs/(w*h*4),meanPremultipliedRgbError:compositedRGBAbs/(w*h*3),meanAlphaError:alphaAbs/(w*h),maxError,nontransparentPixels:visibleMismatch,spatial,diffBitmap:diff.transferToImageBitmap(),heatmapBitmap:hot.transferToImageBitmap()};}
  const pixels=output.data;let checksum=2166136261;for(let i=0;i<pixels.length;i++){checksum^=pixels[i];checksum=Math.imul(checksum,16777619)}
- return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.visibilityMap?'classification-preview':(options.forceVisible?'force-visible':'original'),order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough}};
+ return {workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION,renderOptions:{enableMasks,enableClipping,enablePassThrough,forceVisible:!!options.forceVisible,reverseOrder:!!options.reverseOrder},checksum:(checksum>>>0).toString(16).padStart(8,'0'),bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn:counts.drawn,missing:counts.emptyImage,trace,counts,mode:options.debugMode?'diagnostic-preview':(options.visibilityMap?'classification-preview':(options.forceVisible?'force-visible':'original')),order:options.reverseOrder?'diagnostic-reversed':'verified',features:{enableMasks,enableClipping,enablePassThrough},debug:{mode:options.debugMode||null,skipLayerId:options.debugSkipLayerId||null,onlyLayerId:options.debugOnlyLayerId||null,normalBlendId:options.debugNormalBlendId||null}};
 }
 function findNode(nodes,id,prefix='r'){for(let i=0;i<(nodes||[]).length;i++){const l=nodes[i],key=prefix+'/'+i;if(key===id)return l;if(l.children){const result=findNode(l.children,id,key);if(result)return result}}return null}
 self.postMessage({type:'ready',workerVersion:WORKER_VERSION,renderEngineRevision:RENDER_ENGINE_REVISION});
