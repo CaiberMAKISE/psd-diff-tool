@@ -1,6 +1,6 @@
  'use strict';
-const WORKER_VERSION='v0.3.1';
-const RENDER_ENGINE_REVISION='classification-preview-1';
+const WORKER_VERSION='v0.3.2';
+const RENDER_ENGINE_REVISION='classification-preview-worker-cachefix-2';
 let ready=false,psdDoc=null,docInfo=null;
 const cdn='https://cdn.jsdelivr.net/npm/ag-psd@31.0.3/dist/bundle.js';
 function init(){if(ready)return;importScripts(cdn);if(typeof agPsd==='undefined')throw Error('ag-psd の読み込みに失敗しました');agPsd.initializeCanvas((w,h)=>new OffscreenCanvas(w,h));ready=true;}
