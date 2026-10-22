@@ -6,9 +6,9 @@ const blendMap={normal:'source-over',multiply:'multiply',screen:'screen',overlay
 function isGroup(n){return Array.isArray(n.children)}
 function normalize(nodes,prefix='r'){return(nodes||[]).map((l,i)=>{const id=prefix+'/'+i;return {id,name:String(l.name??''),type:isGroup(l)?'group':'layer',visible:l.hidden!==true,blendMode:l.blendMode||'normal',opacity:l.opacity??255,clipping:!!l.clipping,hasMask:!!(l.mask||l.realMask),hasEffects:!!l.effects,children:isGroup(l)?normalize(l.children,id):undefined}})}
 function makeCanvas(w,h){const c=new OffscreenCanvas(w,h);return c}
-function render(options={}){if(!psdDoc)throw Error('PSDが読み込まれていません');const {width:w,height:h}=psdDoc,c=makeCanvas(w,h),ctx=c.getContext('2d',{willReadFrequently:true});const warnings=new Set();let drawn=0,missing=0;const trace=[];const counts={total:0,groups:0,hidden:0,hiddenDescendants:0,emptyImage:0,drawn:0,clipping:0,mask:0,effects:0,unsupportedBlend:0};
+function render(options={}){if(!psdDoc)throw Error('PSDが読み込まれていません');const {width:w,height:h}=psdDoc,c=makeCanvas(w,h),ctx=c.getContext('2d',{willReadFrequently:true});const warnings=new Set();let drawn=0,missing=0;const trace=[];let layerOrdinal=0;const counts={total:0,groups:0,hidden:0,hiddenDescendants:0,emptyImage:0,drawn:0,clipping:0,mask:0,effects:0,unsupportedBlend:0};
   // PSD nodes are stored top-first. Render from bottom to top, preserving order.
-  function nodesDraw(nodes,target,parentPath="",ancestorHidden=false){for(const l of [...(nodes||[])].reverse())draw(l,target,parentPath,ancestorHidden)}
+  function nodesDraw(nodes,target,parentPath="",ancestorHidden=false){const ordered=options.reverseOrder? [...(nodes||[])]:[...(nodes||[])].reverse();for(const l of ordered)draw(l,target,parentPath,ancestorHidden)}
   function draw(l,target,parentPath,ancestorHidden){
     const path=parentPath+'/'+(l.name||'(無名)');
     const isHidden=l.hidden===true;
@@ -17,7 +17,7 @@ function render(options={}){if(!psdDoc)throw Error('PSDが読み込まれてい�
     const entry={path,name:l.name||'',type:g?'group':'layer',originalHidden:isHidden,ancestorHidden,hasCanvas,hasImageData,
       blendMode:mode,opacity:l.opacity??null,clipping:!!l.clipping,mask:!!(l.mask||l.realMask),effects:!!l.effects,
       bounds:{left:l.left??null,top:l.top??null,right:l.right??null,bottom:l.bottom??null},
-      canvasSize:l.canvas?{width:l.canvas.width,height:l.canvas.height}:null,reason:'',rendered:false};
+      canvasSize:l.canvas?{width:l.canvas.width,height:l.canvas.height}:null,reason:'',rendered:false,drawOrder:null};
     trace.push(entry);counts.total++;
     if(g)counts.groups++;
     if(l.clipping)counts.clipping++;
@@ -38,7 +38,7 @@ function render(options={}){if(!psdDoc)throw Error('PSDが読み込まれてい�
     if(l.effects)warnings.add('レイヤー効果未再現: '+path);
     const img=l.canvas||l.imageData;
     if(!img){missing++;counts.emptyImage++;entry.reason='no-image';return}
-    if(l.canvas){applyComposite(target,l.canvas,l.left||0,l.top||0,l,mode);drawn++;counts.drawn++;entry.rendered=true;entry.reason='drawn'}
+    if(l.canvas){entry.drawOrder=++layerOrdinal;applyComposite(target,l.canvas,l.left||0,l.top||0,l,mode);drawn++;counts.drawn++;entry.rendered=true;entry.reason='drawn'}
     else {warnings.add('画像データ形式が未対応: '+path);missing++;entry.reason='imageData-only';}
   }
   function applyComposite(target,src,x,y,l,mode){target.save();target.globalAlpha=Math.min(1,Math.max(0,(l.opacity??1)>1?(l.opacity/255):(l.opacity??1))); const composite=blendMap[mode];if(!composite){warnings.add('未対応合成モード '+mode+' : '+(l.name||'(無名)'));target.globalCompositeOperation='source-over'}else target.globalCompositeOperation=composite;target.drawImage(src,x,y);target.restore()}
@@ -50,6 +50,7 @@ function render(options={}){if(!psdDoc)throw Error('PSDが読み込まれてい�
       alphaAbs+=Math.abs(ref[i+3]-output.data[i+3]);d.data[i]=Math.min(255,Math.abs(ref[i]-output.data[i])*4);d.data[i+1]=Math.min(255,Math.abs(ref[i+1]-output.data[i+1])*4);d.data[i+2]=Math.min(255,Math.abs(ref[i+2]-output.data[i+2])*4);d.data[i+3]=255;}
     dctx.putImageData(d,0,0);comparison={differencePixels:errorPixels,totalPixels:w*h,meanAbsError:totalAbs/(w*h*4),meanPremultipliedRgbError:compositedRGBAbs/(w*h*3),meanAlphaError:alphaAbs/(w*h),maxError,nontransparentPixels:visibleMismatch,diffBitmap:diff.transferToImageBitmap()};
   }
-  return {bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn,missing,trace,counts,mode:options.forceVisible?"force-visible":"original"};
+  return {bitmap:c.transferToImageBitmap(),comparison,warnings:[...warnings].slice(0,150),drawn,missing,trace,counts,mode:options.forceVisible?"force-visible":"original",order:options.reverseOrder?'top-to-bottom':'bottom-to-top'};
 }
-self.onmessage=e=>{const m=e.data;try{if(m?.type==='parse'){init();psdDoc=null;const psd=agPsd.readPsd(m.buffer,{skipLayerImageData:false,skipThumbnail:true,skipLinkedFilesData:true,skipCompositeImageData:false,logMissingFeatures:false});if(psd.width>10000||psd.height>10000||psd.width*psd.height>25000000)throw Error('キャンバスが大きすぎます');psdDoc=psd;docInfo={filename:m.filename,width:psd.width,height:psd.height,colorMode:psd.colorMode,version:psd.version,nodes:normalize(psd.children)};const refCanvas=psd.canvas?makeCanvas(psd.width,psd.height):null;if(refCanvas)refCanvas.getContext('2d').drawImage(psd.canvas,0,0);const ref=refCanvas?refCanvas.transferToImageBitmap():null;self.postMessage({type:'result',report:docInfo,bitmap:ref},ref?[ref]:[])}else if(m?.type==='render'){const r=render(m.options||{});const transfer=[r.bitmap];if(r.comparison?.diffBitmap)transfer.push(r.comparison.diffBitmap);self.postMessage({type:'rendered',...r},transfer)}}catch(err){self.postMessage({type:'error',operation:m?.type,error:String(err?.stack||err)})}};
+function findNode(nodes,id,prefix='r'){for(let i=0;i<(nodes||[]).length;i++){const l=nodes[i],key=prefix+'/'+i;if(key===id)return l;if(l.children){const result=findNode(l.children,id,key);if(result)return result}}return null}
+self.onmessage=e=>{const m=e.data;try{if(m?.type==='parse'){init();psdDoc=null;const psd=agPsd.readPsd(m.buffer,{skipLayerImageData:false,skipThumbnail:true,skipLinkedFilesData:true,skipCompositeImageData:false,logMissingFeatures:false});if(psd.width>10000||psd.height>10000||psd.width*psd.height>25000000)throw Error('キャンバスが大きすぎます');psdDoc=psd;docInfo={filename:m.filename,width:psd.width,height:psd.height,colorMode:psd.colorMode,version:psd.version,nodes:normalize(psd.children)};const refCanvas=psd.canvas?makeCanvas(psd.width,psd.height):null;if(refCanvas)refCanvas.getContext('2d').drawImage(psd.canvas,0,0);const ref=refCanvas?refCanvas.transferToImageBitmap():null;self.postMessage({type:'result',report:docInfo,bitmap:ref},ref?[ref]:[])}else if(m?.type==='render'){const r=render(m.options||{});const transfer=[r.bitmap];if(r.comparison?.diffBitmap)transfer.push(r.comparison.diffBitmap);self.postMessage({type:'rendered',...r},transfer)}else if(m?.type==='isolate'){const n=findNode(psdDoc?.children,m.nodeId);if(!n)throw Error('レイヤーが見つかりません: '+m.nodeId);const c=makeCanvas(psdDoc.width,psdDoc.height),ctx=c.getContext('2d');const nodes=[];function paint(node){if(isGroup(node)){for(const ch of [...node.children].reverse())paint(ch)}else if(node.canvas){ctx.save();ctx.globalAlpha=(node.opacity??1)>1?node.opacity/255:(node.opacity??1);ctx.globalCompositeOperation=blendMap[node.blendMode||'normal']||'source-over';ctx.drawImage(node.canvas,node.left||0,node.top||0);ctx.restore();nodes.push(node.name||'')}}paint(n);const bitmap=c.transferToImageBitmap();self.postMessage({type:'isolated',bitmap,nodeId:m.nodeId,names:nodes},[bitmap])}}catch(err){self.postMessage({type:'error',operation:m?.type,error:String(err?.stack||err)})}};
